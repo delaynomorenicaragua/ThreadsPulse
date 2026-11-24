@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: 'Direct URL to decrypted Threads IPA (optional)'
+        description: 'Optional direct download URL for decrypted Threads IPA'
         required: false
         default: ''
         type: string
+
       variant:
-        description: 'IPA variant to build'
+        description: 'Select IPA build variant'
         required: true
         type: choice
         options:
@@ -39,29 +40,35 @@ jobs:
           SECRET_URL: ${{ secrets.DECRYPTED_IPA_URL }}
         run: |
           set -e
-          DEFAULT_URL="https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk"
+
+          DEFAULT_URL="https://github.com/delaynomorenicaragua/ThreadsPulse/releases/download/threads-457/com.burbn.barcelona_457.0.0.ipa"
+
           URL="${INPUT_URL:-${SECRET_URL:-$DEFAULT_URL}}"
+
           echo "IPA_URL=$URL" >> "$GITHUB_ENV"
+
+          echo "IPA download URL configured."
 
       - name: Download Threads IPA
         run: |
           set -e
 
-          python3 -m pip install --upgrade gdown
+          echo "Downloading Threads IPA from direct URL..."
 
-          if [[ "$IPA_URL" == *"drive.google.com"* ]] || \
-             [[ "$IPA_URL" == *"drive.usercontent.google.com"* ]]; then
-            echo "Downloading IPA from Google Drive..."
-            gdown "$IPA_URL" -O Threads.ipa
-          else
-            echo "Downloading IPA from direct URL..."
-            curl -fL --retry 3 \
-              --connect-timeout 30 \
-              -o Threads.ipa "$IPA_URL"
-          fi
+          curl -fL \
+            --retry 3 \
+            --retry-delay 5 \
+            --connect-timeout 30 \
+            --max-time 600 \
+            -o Threads.ipa \
+            "$IPA_URL"
 
           echo "Checking downloaded file..."
+
+          test -s Threads.ipa
+
           ls -lh Threads.ipa
+
           file Threads.ipa
 
           if ! unzip -tq Threads.ipa; then
@@ -74,7 +81,7 @@ jobs:
             exit 1
           fi
 
-          echo "IPA download and validation completed."
+          echo "Threads IPA downloaded successfully."
 
       - name: Install Theos
         id: theos
@@ -85,8 +92,11 @@ jobs:
       - name: Build ThreadsPulse and Safari extension
         run: |
           set -e
+
           MAKE="gmake FINALPACKAGE=1 TARGET=iphone:clang:${SDK_VERSION}:${MIN_IOS}"
+
           $MAKE
+
           $MAKE -C OpenThreadsSafariExtension
 
       - name: Inject IPA
@@ -114,14 +124,12 @@ jobs:
               "$@"
           }
 
-          if [ "$VARIANT" = "both" ] || \
-             [ "$VARIANT" = "sideload" ]; then
+          if [ "$VARIANT" = "both" ] || [ "$VARIANT" = "sideload" ]; then
             inject sideload \
               --appex OpenThreadsSafariExtension/.theos/obj/OpenThreadsSafariExtension.appex
           fi
 
-          if [ "$VARIANT" = "both" ] || \
-             [ "$VARIANT" = "noplugins" ]; then
+          if [ "$VARIANT" = "both" ] || [ "$VARIANT" = "noplugins" ]; then
             inject noplugins --no-plugins
           fi
 
@@ -131,6 +139,7 @@ jobs:
           THREADS_VERSION: ${{ steps.inject.outputs.threads_version }}
         run: |
           set -e
+
           cd dist
 
           for f in *.ipa; do
@@ -139,22 +148,25 @@ jobs:
           done
 
           rm -f ../Threads.ipa
+
           ls -lah
 
       - name: Upload sideload variant
-        if: inputs.variant != 'noplugins'
+        if: inputs.variant == 'sideload' || inputs.variant == 'both'
         uses: actions/upload-artifact@v4
         with:
           name: Threads_${{ steps.inject.outputs.threads_version }}_Pulse_${{ steps.theos.outputs.version }}_sideload
           path: dist/*_sideload.ipa
+          if-no-files-found: error
           retention-days: 3
           compression-level: 0
 
       - name: Upload noplugins variant
-        if: inputs.variant != 'sideload'
+        if: inputs.variant == 'noplugins' || inputs.variant == 'both'
         uses: actions/upload-artifact@v4
         with:
           name: Threads_${{ steps.inject.outputs.threads_version }}_Pulse_${{ steps.theos.outputs.version }}_noplugins
           path: dist/*_noplugins.ipa
+          if-no-files-found: error
           retention-days: 3
           compression-level: 0
