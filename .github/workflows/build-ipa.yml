@@ -4,17 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: 'Direct download link to a decrypted Threads IPA (leave empty to use the DECRYPTED_IPA_URL secret)'
+        description: 'Direct URL to decrypted Threads IPA (optional)'
         required: false
         default: ''
+        type: string
       variant:
-        description: 'sideload = certificate signing (with Safari extension); noplugins = SideStore / AltStore free account'
+        description: 'IPA variant to build'
+        required: true
         type: choice
         options:
-          - both
-          - sideload
           - noplugins
-        default: both
+          - sideload
+          - both
+        default: noplugins
 
 permissions:
   contents: read
@@ -26,28 +28,53 @@ env:
 jobs:
   build-ipa:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Check IPA link
+      - name: Resolve IPA URL
         env:
           INPUT_URL: ${{ inputs.ipa_url }}
           SECRET_URL: ${{ secrets.DECRYPTED_IPA_URL }}
         run: |
-          URL="${INPUT_URL:-$SECRET_URL}"
+          set -e
+          DEFAULT_URL="https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk"
+          URL="${INPUT_URL:-${SECRET_URL:-$DEFAULT_URL}}"
           echo "IPA_URL=$URL" >> "$GITHUB_ENV"
+
       - name: Download Threads IPA
         run: |
+          set -e
+
           python3 -m pip install --upgrade gdown
-gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Threads.ipa
-          test -s Threads.ipa
-          unzip -t Threads.ipa
-          if ! unzip -l Threads.ipa | grep -q 'Payload/.*\.app/Info.plist'; then
-            echo "::error::The downloaded file is not an IPA. Make sure the link downloads the file directly instead of opening a web page."
+
+          if [[ "$IPA_URL" == *"drive.google.com"* ]] || \
+             [[ "$IPA_URL" == *"drive.usercontent.google.com"* ]]; then
+            echo "Downloading IPA from Google Drive..."
+            gdown "$IPA_URL" -O Threads.ipa
+          else
+            echo "Downloading IPA from direct URL..."
+            curl -fL --retry 3 \
+              --connect-timeout 30 \
+              -o Threads.ipa "$IPA_URL"
+          fi
+
+          echo "Checking downloaded file..."
+          ls -lh Threads.ipa
+          file Threads.ipa
+
+          if ! unzip -tq Threads.ipa; then
+            echo "::error::Downloaded file is not a valid IPA archive."
             exit 1
           fi
-          ls -lh Threads.ipa
+
+          if ! unzip -Z1 Threads.ipa | grep -Eq '^Payload/[^/]+\.app/Info\.plist$'; then
+            echo "::error::IPA structure is invalid."
+            exit 1
+          fi
+
+          echo "IPA download and validation completed."
 
       - name: Install Theos
         id: theos
@@ -57,6 +84,7 @@ gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Thre
 
       - name: Build ThreadsPulse and Safari extension
         run: |
+          set -e
           MAKE="gmake FINALPACKAGE=1 TARGET=iphone:clang:${SDK_VERSION}:${MIN_IOS}"
           $MAKE
           $MAKE -C OpenThreadsSafariExtension
@@ -68,18 +96,32 @@ gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Thre
           TP_VERSION: ${{ steps.theos.outputs.version }}
         run: |
           set -e
+
           mkdir -p dist
+
           BUNDLE="layout/Library/Application Support/ThreadsPulse/ThreadsPulse.bundle"
+
           inject() {
-            local name="$1"; shift
-            python3 -I scripts/inject_ipa.py -i Threads.ipa \
-              -d .theos/obj/ThreadsPulse.dylib -b "$BUNDLE" \
-              -o "dist/$name.ipa" --github-output "$GITHUB_OUTPUT" "$@"
+            local name="$1"
+            shift
+
+            python3 -I scripts/inject_ipa.py \
+              -i Threads.ipa \
+              -d .theos/obj/ThreadsPulse.dylib \
+              -b "$BUNDLE" \
+              -o "dist/$name.ipa" \
+              --github-output "$GITHUB_OUTPUT" \
+              "$@"
           }
-          if [ "$VARIANT" = "both" ] || [ "$VARIANT" = "sideload" ]; then
-            inject sideload --appex OpenThreadsSafariExtension/.theos/obj/OpenThreadsSafariExtension.appex
+
+          if [ "$VARIANT" = "both" ] || \
+             [ "$VARIANT" = "sideload" ]; then
+            inject sideload \
+              --appex OpenThreadsSafariExtension/.theos/obj/OpenThreadsSafariExtension.appex
           fi
-          if [ "$VARIANT" = "both" ] || [ "$VARIANT" = "noplugins" ]; then
+
+          if [ "$VARIANT" = "both" ] || \
+             [ "$VARIANT" = "noplugins" ]; then
             inject noplugins --no-plugins
           fi
 
@@ -88,12 +130,16 @@ gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Thre
           TP_VERSION: ${{ steps.theos.outputs.version }}
           THREADS_VERSION: ${{ steps.inject.outputs.threads_version }}
         run: |
+          set -e
           cd dist
+
           for f in *.ipa; do
-            mv "$f" "Threads_${THREADS_VERSION}_Pulse_${TP_VERSION}_${f%.ipa}.ipa"
+            mv "$f" \
+              "Threads_${THREADS_VERSION}_Pulse_${TP_VERSION}_${f%.ipa}.ipa"
           done
+
           rm -f ../Threads.ipa
-          ls -la
+          ls -lah
 
       - name: Upload sideload variant
         if: inputs.variant != 'noplugins'
