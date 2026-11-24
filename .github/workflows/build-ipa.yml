@@ -36,14 +36,8 @@ jobs:
           SECRET_URL: ${{ secrets.DECRYPTED_IPA_URL }}
         run: |
           URL="${INPUT_URL:-$SECRET_URL}"
-          if [ -z "$URL" ]; then
-            echo "::error::Enter a download link to a decrypted Threads IPA in ipa_url, or set the DECRYPTED_IPA_URL secret"
-            exit 1
-          fi
-          echo "::add-mask::$URL"
           echo "IPA_URL=$URL" >> "$GITHUB_ENV"
-
-           - name: Download Threads IPA
+      - name: Download Threads IPA
         run: |
           python3 -m pip install --break-system-packages --upgrade gdown
           python3 -m gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Threads.ipa
