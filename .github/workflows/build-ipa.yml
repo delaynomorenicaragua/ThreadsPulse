@@ -43,13 +43,13 @@ jobs:
           echo "::add-mask::$URL"
           echo "IPA_URL=$URL" >> "$GITHUB_ENV"
 
-      - name: Download Threads IPA
+           - name: Download Threads IPA
         run: |
-          python3 -m pip install --break-system-packages gdown
-
-          gdown --id 1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk -O Threads.ipa
-
-          test -s Threads.ipa
+          python3 -m pip install --break-system-packages --upgrade gdown
+          python3 -m gdown "https://drive.google.com/uc?id=1mQ_z_g5UNnjmADVAMDf8aEU-VgG1Xlgk" -O Threads.ipa
+          ls -lh Threads.ipa
+          file Threads.ipa
+          unzip -t Threads.ipa
           if ! unzip -l Threads.ipa | grep -q 'Payload/.*\.app/Info.plist'; then
             echo "::error::The downloaded file is not an IPA. Make sure the link downloads the file directly instead of opening a web page."
             exit 1
